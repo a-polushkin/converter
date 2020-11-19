@@ -1,60 +1,81 @@
 const fs = require("fs");
 const stream = require("stream");
-const util = require("util");
 
 const Transform = stream.Transform;
 
-function Upper(options) {
-  Transform.call(this, options);
+class Upper extends Transform {
+  headers = "";
+  residueFromPreviousChunk = "";
+  separator = "";
+
+  constructor(separator) {
+    super();
+    this.separator = separator;
+  }
+
+  createJson = (headers, line, isLast) => {
+    const headerArray = headers.split(this.separator);
+    const lineArray = line.split(this.separator);
+    const resultArray = [];
+    for (let i = 0; i < headerArray.length; i++) {
+      resultArray.push(`"${headerArray[i]}":"${lineArray[i]}"`);
+    }
+    const resultString = resultArray.join(",");
+    return isLast ?`{${resultString}}]`:`{${resultString}}, \n`;
+  };
+
+  _transform(chunk, encoding, callback) {
+    const arr = chunk.toString().split("\r");
+    if (arr.length === 1) {
+      this.residueFromPreviousChunk = this.residueFromPreviousChunk + arr[0];
+    } else {
+      const line = this.residueFromPreviousChunk + arr[0];
+      if (this.headers !== "") {
+        this.push(Buffer.from(this.createJson(this.headers, line, false)));
+      }
+      if (this.headers === "") {
+        this.headers = line;
+        this.push(Buffer.from("["))
+      }
+      this.residueFromPreviousChunk = arr[1];
+    }
+    callback();
+  }
+
+  _flush(callback) {
+    this.push(
+      Buffer.from(this.createJson(this.headers, this.residueFromPreviousChunk,true))
+    );
+    callback();
+  }
 }
 
-util.inherits(Upper, Transform);
+const myArgs = process.argv.slice(2);
+let sourceFile = '';
+let resultFile = '';
+let separator = '';
 
-let headers = "";
-let residueFromPreviousChunk = "";
-
-const createJson = (headers, line) => {
-  const headerArray = headers.split(",");
-  const lineArray = line.split(",");
-  const resultArray = [];
-  for (let i = 0; i < headerArray.length; i++) {
-    resultArray.push(`"${headerArray[i]}":"${lineArray[i]}"`);
+for (let i=0; i<myArgs.length; i++){
+  switch (myArgs[i]) {
+    case "--sourceFile":
+      sourceFile = myArgs[i+1];
+      break;
+    case "--resultFile":
+      resultFile = myArgs[i+1];
+      break;
+    case "--separator":
+      separator = myArgs[i+1];
+      break;
   }
-  const resultString = resultArray.join(",");
-  return `{${resultString}}, \n`;
-};
+}
 
-Upper.prototype._transform = function (chunk, enc, callback) {
-  const arr = chunk.toString().split("\r");
-  if (arr.length === 1) {
-    residueFromPreviousChunk = residueFromPreviousChunk + arr[0];
-  } else {
-    const line = residueFromPreviousChunk + arr[0];
-    if (headers !== "") {
-      this.push(Buffer.from(createJson(headers, line)));
-    }
-    if (headers === "") {
-      headers = line;
-    }
-    residueFromPreviousChunk = arr[1];
-  }
-  callback();
-};
-
-Upper.prototype._flush = function (callback) {
-  this.push(Buffer.from(createJson(headers,residueFromPreviousChunk)));
-  callback();
-};
-
-
-const upper = new Upper();
-
-const readableStream = new fs.createReadStream("test.csv", {
+const upper = new Upper(separator);
+const readableStream = new fs.createReadStream(sourceFile, {
   flags: "r",
   encoding: "utf-8",
   highWaterMark: 50,
 });
-const writableStream = new fs.createWriteStream("test.json");
+const writableStream = new fs.createWriteStream(resultFile);
 
 readableStream
   .pipe(upper)
